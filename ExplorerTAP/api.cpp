@@ -15,9 +15,42 @@ LRESULT CALLBACK CallWndProc(int nCode, WPARAM wParam, LPARAM lParam) noexcept
 	return CallNextHookEx(nullptr, nCode, wParam, lParam);
 }
 
+static HRESULT GetTaskbarAppearanceService(REFIID riid, LPVOID* ppv)
+{
+	winrt::com_ptr<IUnknown> service;
+	HRESULT hr = GetActiveObject(CLSID_TaskbarAppearanceService, nullptr, service.put());
+	if (FAILED(hr))
+	{
+		return hr;
+	}
+
+	DWORD version = 0;
+	hr = service.as<IVersionedApi>()->GetVersion(&version);
+	if (SUCCEEDED(hr))
+	{
+		if (version != TAP_API_VERSION)
+		{
+			return HRESULT_FROM_WIN32(ERROR_PRODUCT_VERSION);
+		}
+	}
+	else
+	{
+		return hr;
+	}
+
+	return service.as(riid, ppv);
+}
+
 HRESULT InjectExplorerTAP(HWND window, REFIID riid, LPVOID* ppv) try
 {
 	TaskbarAppearanceService::InstallProxyStub();
+
+	// the TAP stays in Explorer after we exit, so if a previous run already injected it, just reuse it.
+	HRESULT hr = GetTaskbarAppearanceService(riid, ppv);
+	if (hr != MK_E_UNAVAILABLE)
+	{
+		return hr;
+	}
 
 	DWORD pid = 0;
 	const DWORD tid = GetWindowThreadProcessId(window, &pid);
@@ -46,6 +79,12 @@ HRESULT InjectExplorerTAP(HWND window, REFIID riid, LPVOID* ppv) try
 	{
 		const auto event = TAPSite::GetReadyEvent();
 
+		// the ready event is a named manual-reset event, so it can still be signaled by a TAP previously loaded
+		// in Explorer that didn't register (or no longer has) a service: an older version of TranslucentTB, or
+		// a third-party app reusing our code. if we don't reset it, the wait returns immediately and
+		// GetActiveObject fails with MK_E_UNAVAILABLE.
+		event.ResetEvent();
+
 		// InitializeXamlDiagnosticsEx pins the DLL forever in the target process - so we can discard the hook once it happens
 		// this has the bonus effect that if InitializeXamlDiagnosticsEx fails, the DLL gets unloaded.
 		wil::unique_hhook hook(SetWindowsHookEx(WH_CALLWNDPROC, CallWndProc, wil::GetModuleInstanceHandle(), tid));
@@ -66,30 +105,19 @@ HRESULT InjectExplorerTAP(HWND window, REFIID riid, LPVOID* ppv) try
 		{
 			return HRESULT_FROM_WIN32(WAIT_TIMEOUT);
 		}
-	}
 
-	winrt::com_ptr<IUnknown> service;
-	HRESULT hr = GetActiveObject(CLSID_TaskbarAppearanceService, nullptr, service.put());
-	if (FAILED(hr)) [[unlikely]]
-	{
-		return hr;
-	}
-
-	DWORD version = 0;
-	hr = service.as<IVersionedApi>()->GetVersion(&version);
-	if (SUCCEEDED(hr))
-	{
-		if (version != TAP_API_VERSION)
+		// another TAP sharing the event might have signaled it (for example because it failed to initialize)
+		// before ours registered the service. give ours a bit more time, keeping the hook alive so that our
+		// DLL doesn't get unloaded while it's still initializing.
+		static constexpr ULONGLONG REGISTER_TIMEOUT = 5000;
+		const ULONGLONG deadline = GetTickCount64() + REGISTER_TIMEOUT;
+		while ((hr = GetTaskbarAppearanceService(riid, ppv)) == MK_E_UNAVAILABLE && GetTickCount64() < deadline)
 		{
-			return HRESULT_FROM_WIN32(ERROR_PRODUCT_VERSION);
+			Sleep(100);
 		}
 	}
-	else
-	{
-		return hr;
-	}
 
-	return service.as(riid, ppv);
+	return hr;
 }
 catch (...)
 {
