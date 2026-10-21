@@ -93,6 +93,10 @@ HRESULT InjectExplorerTAP(HWND window, REFIID riid, LPVOID* ppv) try
 			return HRESULT_FROM_WIN32(GetLastError());
 		}
 
+		// the hook DLL only gets loaded once the taskbar thread processes a sent message, which can take a long time
+		// if the taskbar is idle. send it a message ourselves so that the injection happens right away.
+		SendMessageTimeout(window, WM_NULL, 0, 0, SMTO_ABORTIFHUNG, 1000, nullptr);
+
 		static constexpr DWORD READY_TIMEOUT =
 #ifdef _DEBUG
 			// do not timeout on debug builds, to allow debugging the DLL while it's loading in explorer
