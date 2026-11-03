@@ -343,6 +343,13 @@ LRESULT TaskbarAttributeWorker::MessageHandler(UINT uMsg, WPARAM wParam, LPARAM 
 	{
 		return OnPowerBroadcast(reinterpret_cast<const POWERBROADCAST_SETTING *>(lParam));
 	}
+	else if (uMsg == WM_TIMER && wParam == DETECT_TASKBAR_RETRY_TIMER_ID)
+	{
+		KillTimer(m_WindowHandle, DETECT_TASKBAR_RETRY_TIMER_ID);
+		MessagePrint(spdlog::level::debug, L"Taskbar type was unknown, retrying detection...");
+		ResetState();
+		return 0;
+	}
 	else if (uMsg == m_TaskbarCreatedMessage)
 	{
 		MessagePrint(spdlog::level::debug, L"Main taskbar got created, refreshing...");
@@ -1488,7 +1495,9 @@ void TaskbarAttributeWorker::ResetState(bool manual)
 				}
 				else
 				{
-					// unknown taskbar type - we might've detected explorer too early. do nothing for now. we should get a refresh later and be able to detect it.
+					// unknown taskbar type - we might've detected explorer too early. at logon, the XAML island can get created
+					// after the taskbar window without anything notifying us, so try again in a little while.
+					SetTimer(m_WindowHandle, DETECT_TASKBAR_RETRY_TIMER_ID, DETECT_TASKBAR_RETRY_INTERVAL, nullptr);
 					return;
 				}
 

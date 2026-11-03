@@ -178,6 +178,9 @@ private:
 	LRESULT OnRequestAttributeRefresh(LPARAM lParam);
 	LRESULT MessageHandler(UINT uMsg, WPARAM wParam, LPARAM lParam) override;
 
+	static constexpr UINT_PTR DETECT_TASKBAR_RETRY_TIMER_ID = 1;
+	static constexpr UINT DETECT_TASKBAR_RETRY_INTERVAL = 500;
+
 	// Config
 	TaskbarAppearance GetConfig(taskbar_iterator taskbar) const;
 
